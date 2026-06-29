@@ -402,12 +402,14 @@ int main(int argc, char *argv[]) {
   debugPrintf("yoyo_nx: main started\n");
   cpu_boost(1);
   ctype_init();
-  debugPrintf("yoyo_nx: initializing network\n");
-Result net_rc = socketInitializeDefault();
-if (R_FAILED(net_rc))
-    debugPrintf("yoyo_nx: socketInitializeDefault failed: 0x%08X\n", net_rc);
 
-And in the cleanup section at the very end of main(), before plExit():
+  // Initialize BSD socket layer so the GMS2 network_* functions can reach the
+  // Switch's Wi-Fi stack. Must happen before Startup() -- the engine may spin
+  // up network threads during initialisation.
+  debugPrintf("yoyo_nx: initializing network\n");
+  Result net_rc = socketInitializeDefault();
+  if (R_FAILED(net_rc))
+    debugPrintf("yoyo_nx: socketInitializeDefault failed: 0x%08X (no network?)\n", net_rc);
 
   if (read_config(CONFIG_NAME) != 0)
     write_config(CONFIG_NAME);
@@ -517,8 +519,6 @@ And in the cleanup section at the very end of main(), before plExit():
   }
 
   debugPrintf("yoyo_nx: Startup returned\n");
-
-
 
   // input
   padConfigureInput(1, HidNpadStyleSet_NpadStandard);

@@ -10,9 +10,9 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
 #---------------------------------------------------------------------------------
-TARGET		:=	stt16bit_nx
-APP_TITLE	:=	Sonic Triple Trouble 16-Bit
-APP_AUTHOR	:=	Noah N. Copeland
+TARGET      :=  dontforget_nx
+APP_TITLE   :=  Don't Forget
+APP_AUTHOR  :=  RickyGDev
 APP_VERSION	:=	1.0.0
 BUILD		:=	build
 SOURCES		:=	source

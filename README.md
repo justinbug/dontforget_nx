@@ -71,7 +71,7 @@ Run `make` to compile.
 
 ### Credits
 
-* [fgsfdsfgs](https://github.com/fgsfdsfgs) for [ct_nx](https://github.com/fgsfdsfgs/ct_nx) and [max_nx](https://github.com/fgsfdsfgs/max_nx), which this loader is heavily based on.
+* [fgsfdsfgs](https://github.com/fgsfdsfgs) for [max_nx](https://github.com/fgsfdsfgs/max_nx) and [NaGaa95](https://github.com/NaGaa95) for [ct_nx](https://github.com/NaGaa95/ct_nx), which this loader is heavily based on.
 * [TheOfficialFloW](https://github.com/TheOfficialFloW) for the original Vita ports that pioneered the Android `.so` loading technique.
 * [Noah Copeland](https://gamejolt.com/games/sonictripletrouble16bit/322794) for *Sonic Triple Trouble 16-Bit*.
 

@@ -15,7 +15,7 @@
 #include <EGL/egl.h>
 #include <switch.h>
 #include <SDL2/SDL.h>
-
+#include <switch/services/bsd.h>
 #include "config.h"
 #include "util.h"
 #include "libc_shim.h"
@@ -402,6 +402,12 @@ int main(int argc, char *argv[]) {
   debugPrintf("yoyo_nx: main started\n");
   cpu_boost(1);
   ctype_init();
+  debugPrintf("yoyo_nx: initializing network\n");
+Result net_rc = socketInitializeDefault();
+if (R_FAILED(net_rc))
+    debugPrintf("yoyo_nx: socketInitializeDefault failed: 0x%08X\n", net_rc);
+
+And in the cleanup section at the very end of main(), before plExit():
 
   if (read_config(CONFIG_NAME) != 0)
     write_config(CONFIG_NAME);
@@ -566,6 +572,7 @@ int main(int argc, char *argv[]) {
   prefs_flush();
   opensles_shutdown();
   egl_deinit();
+  socketExit();
   plExit();
 
   extern void NX_NORETURN __libnx_exit(int rc);

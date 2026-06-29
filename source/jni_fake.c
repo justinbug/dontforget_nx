@@ -618,7 +618,7 @@ static void *call_object(const char *name, va_list va) {
   if (!strcmp(name, "getCocos2dxWritablePath") || !strcmp(name, "getWritablePath"))
     return jni_make_string(writable_dir());
   if (!strcmp(name, "getCocos2dxPackageName") || !strcmp(name, "getPackageName"))
-    return jni_make_string("com.noahncopeland.game");
+    return jni_make_string("com.rickygdev.dontforget");
   if (!strcmp(name, "getDeviceModel")) return jni_make_string("Nintendo Switch");
   if (!strcmp(name, "getVersion")) return jni_make_string("1.2.8");
   if (!strcmp(name, "getStringForKey")) {
@@ -659,7 +659,7 @@ static void *call_object(const char *name, va_list va) {
     return NULL;
   }
   if (!strcmp(name, "GetUDID")) return jni_make_string("1234567890");
-  if (!strcmp(name, "GetAppID")) return jni_make_string("com.noahncopeland.game");
+  if (!strcmp(name, "GetAppID")) return jni_make_string("com.rickygdev.dontforget");
   if (!strcmp(name, "GetSaveFileName")) return jni_make_string("save.dat");
   if (!strcmp(name, "getPackageManager")) return jni_make_object("PackageManager");
   if (!strcmp(name, "getPackageInfo")) return jni_make_object("PackageInfo");
@@ -787,7 +787,7 @@ static void *j_GetObjectField(void *env, void *obj, FakeID *fid) {
   (void)env; (void)obj;
   debugPrintf("JNI: GetObjectField('%s')\n", fid->name);
   if (!strcmp(fid->name, "versionName")) {
-    return jni_make_string("1.2.8");
+    return jni_make_string("2.0.0");
   }
   debugPrintf("JNI: GetObjectField('%s') UNHANDLED\n", fid->name);
   return NULL;
@@ -797,7 +797,7 @@ static juint j_GetIntField(void *env, void *obj, FakeID *fid) {
   (void)env; (void)obj;
   debugPrintf("JNI: GetIntField('%s')\n", fid->name);
   if (!strcmp(fid->name, "versionCode")) {
-    return 128;
+    return 200;
   }
   debugPrintf("JNI: GetIntField('%s') UNHANDLED\n", fid->name);
   return 0;

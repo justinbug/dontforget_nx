@@ -32,6 +32,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include "config.h"
 #include "util.h"
 #include "so_util.h"

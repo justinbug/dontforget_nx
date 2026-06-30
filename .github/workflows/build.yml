@@ -1,5 +1,4 @@
 name: Build
-
 on:
   push:
     branches: ["**"]
@@ -7,16 +6,17 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write   # required for softprops/action-gh-release to publish releases
+
 jobs:
   build:
     name: Build NRO
     runs-on: ubuntu-latest
-
     # Official devkitPro image ships devkitA64 + libnx + switch-tools.
     # Port libraries (SDL2, mesa, ffmpeg, …) are installed below.
     container:
       image: devkitpro/devkita64:latest
-
     steps:
       # -----------------------------------------------------------------------
       # 1. Source
@@ -27,8 +27,9 @@ jobs:
       # -----------------------------------------------------------------------
       # 2. Port-library cache
       # Cache the Switch portlib tree so repeated runs skip the ~400 MB
-      # dkp-pacman download. The cache key includes the package list so any
-      # change to the deps below busts it automatically.
+      # dkp-pacman download. The cache key includes the package list and the
+      # image tag so either changing deps or pulling a new devkitA64 image
+      # busts the cache automatically.
       # -----------------------------------------------------------------------
       - name: Cache portlibs
         id: cache-portlibs
@@ -37,16 +38,32 @@ jobs:
           path: /opt/devkitpro/portlibs/switch
           key: dkp-portlibs-${{ hashFiles('.github/workflows/build.yml') }}
 
+      # -----------------------------------------------------------------------
+      # 2b. Work around devkitPro's Cloudflare WAF intermittently 403'ing
+      # pacman's default UA / blocking requests from shared CI IP ranges.
+      # See: https://github.com/devkitPro/pacman/issues/62
+      # -----------------------------------------------------------------------
+      - name: Work around devkitPro 403s
+        if: steps.cache-portlibs.outputs.cache-hit != 'true'
+        run: |
+          PACMAN_CONF=$(find /opt/devkitpro -name pacman.conf | head -n1)
+          echo "Patching $PACMAN_CONF"
+          sed -i '/^\[options\]/a XferCommand = /usr/bin/curl -L -A "Mozilla/5.0" -C - -f --retry 3 --retry-delay 5 -o %o %u' "$PACMAN_CONF"
+
       - name: Install port libraries
         if: steps.cache-portlibs.outputs.cache-hit != 'true'
         run: |
-          dkp-pacman -Sy --noconfirm \
-            switch-sdl2 \
-            switch-mesa \
-            switch-libdrm_nouveau \
-            switch-ffmpeg \
-            switch-freetype \
-            switch-libpng
+          for i in 1 2 3 4 5; do
+            dkp-pacman -Sy --noconfirm \
+              switch-sdl2 \
+              switch-mesa \
+              switch-libdrm_nouveau \
+              switch-ffmpeg \
+              switch-freetype \
+              switch-libpng && break
+            echo "Attempt $i failed, retrying in 15s..."
+            sleep 15
+          done
 
       # -----------------------------------------------------------------------
       # 3. Build

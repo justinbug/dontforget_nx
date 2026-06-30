@@ -1,0 +1,81 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build NRO
+    runs-on: ubuntu-latest
+
+    # Official devkitPro image ships devkitA64 + libnx + switch-tools.
+    # Port libraries (SDL2, mesa, ffmpeg, …) are installed below.
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Source
+      # -----------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Port-library cache
+      # Cache the Switch portlib tree so repeated runs skip the ~400 MB
+      # dkp-pacman download. The cache key includes the package list so any
+      # change to the deps below busts it automatically.
+      # -----------------------------------------------------------------------
+      - name: Cache portlibs
+        id: cache-portlibs
+        uses: actions/cache@v4
+        with:
+          path: /opt/devkitpro/portlibs/switch
+          key: dkp-portlibs-${{ hashFiles('.github/workflows/build.yml') }}
+
+      - name: Install port libraries
+        if: steps.cache-portlibs.outputs.cache-hit != 'true'
+        run: |
+          dkp-pacman -Sy --noconfirm \
+            switch-sdl2 \
+            switch-mesa \
+            switch-libdrm_nouveau \
+            switch-ffmpeg \
+            switch-freetype \
+            switch-libpng
+
+      # -----------------------------------------------------------------------
+      # 3. Build
+      # DEVKITPRO is already set inside the container (/opt/devkitpro).
+      # -----------------------------------------------------------------------
+      - name: Build
+        run: make -j$(nproc)
+
+      # -----------------------------------------------------------------------
+      # 4. Upload .nro for every branch/PR build
+      # -----------------------------------------------------------------------
+      - name: Upload NRO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dontforget_nx-${{ github.sha }}
+          path: |
+            dontforget_nx.nro
+          if-no-files-found: error
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # 5. GitHub Release on version tags (v1.0.0, v1.2.3-rc1, …)
+      # Attach the .nro directly to the release so users can grab it
+      # without navigating to the Actions tab.
+      # -----------------------------------------------------------------------
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dontforget_nx.nro
+          generate_release_notes: true
+          fail_on_unmatched_files: true

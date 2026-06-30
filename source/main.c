@@ -87,9 +87,13 @@ static void check_syscalls(void) {
 
 static void check_data(void) {
   struct stat st;
-  if (stat(SO_NAME, &st) < 0)    fatal_error("Could not find\n%s.\nCheck your data files.", SO_NAME);
-  if (stat(SOCPP_NAME, &st) < 0) fatal_error("Could not find\n%s.\nCheck your data files.", SOCPP_NAME);
-  if (stat(ASSETS_DIR, &st) < 0) fatal_error("Could not find the\n%s/ folder.\nCheck your data files.", ASSETS_DIR);
+  if (stat(SO_NAME, &st) < 0)
+    fatal_error("Could not find\n%s.\nCheck your data files.", SO_NAME);
+  // libc++_shared.so is intentionally not checked here --
+  // newer GMS2 builds link the C++ runtime statically into libyoyo.so,
+  // so the file may legitimately be absent.
+  if (stat(ASSETS_DIR, &st) < 0)
+    fatal_error("Could not find the\n%s/ folder.\nCheck your data files.", ASSETS_DIR);
 }
 
 static void set_screen_size(int w, int h) {
@@ -432,20 +436,40 @@ int main(int argc, char *argv[]) {
   if (!egl_init())
     fatal_error("Failed to create an OpenGL ES 2.0 context.");
 
-  // --- load both modules: libc++_shared first so libyoyo's std imports bind ---
-  debugPrintf("yoyo_nx: loading libc++_shared.so\n");
-  if (so_load(&cpp_mod, SOCPP_NAME, heap_so_base, heap_so_limit) < 0)
-    fatal_error("Could not load\n%s.", SOCPP_NAME);
+  // --- load libyoyo.so; optionally load libc++_shared.so first if present ---
+  // Older GMS2 Android builds ship libc++_shared.so as a separate DSO whose
+  // std:: / __cxa_ symbols libyoyo.so imports at runtime. Newer builds link
+  // the C++ runtime statically, so the file is absent and we skip it entirely.
+  int has_cpp_mod = 0;
+  {
+    struct stat st;
+    if (stat(SOCPP_NAME, &st) == 0) {
+      debugPrintf("yoyo_nx: loading libc++_shared.so\n");
+      if (so_load(&cpp_mod, SOCPP_NAME, heap_so_base, heap_so_limit) < 0)
+        fatal_error("Could not load\n%s.", SOCPP_NAME);
+      has_cpp_mod = 1;
+    } else {
+      debugPrintf("yoyo_nx: libc++_shared.so absent -- C++ runtime is statically linked\n");
+    }
+  }
 
-  void *chrono_base = (void *)ALIGN_MEM((uintptr_t)heap_so_base + cpp_mod.load_size, 0x100000);
-  size_t used = (uintptr_t)chrono_base - (uintptr_t)heap_so_base;
+  void *game_base = has_cpp_mod
+      ? (void *)ALIGN_MEM((uintptr_t)heap_so_base + cpp_mod.load_size, 0x100000)
+      : heap_so_base;
+  size_t used = has_cpp_mod
+      ? ((uintptr_t)game_base - (uintptr_t)heap_so_base)
+      : 0;
+
   debugPrintf("yoyo_nx: loading libyoyo.so\n");
-  if (so_load(&game_mod, SO_NAME, chrono_base, heap_so_limit - used) < 0)
+  if (so_load(&game_mod, SO_NAME, game_base, heap_so_limit - used) < 0)
     fatal_error("Could not load\n%s.", SO_NAME);
 
-  // relocate + resolve (libyoyo's std::/__cxa_ symbols resolve into libc++_shared)
-  debugPrintf("yoyo_nx: resolving imports of cpp_mod\n");
-  ct_resolve_imports(&cpp_mod);
+  // relocate + resolve (when present, libyoyo's std::/__cxa_ symbols resolve
+  // into libc++_shared; otherwise they resolve against the shim table only)
+  if (has_cpp_mod) {
+    debugPrintf("yoyo_nx: resolving imports of cpp_mod\n");
+    ct_resolve_imports(&cpp_mod);
+  }
   debugPrintf("yoyo_nx: resolving imports of game_mod\n");
   ct_resolve_imports(&game_mod);
 
@@ -458,19 +482,23 @@ int main(int argc, char *argv[]) {
   // JNI_OnLoad is optional in GMS2 -- some builds inline it into Startup
 
   debugPrintf("yoyo_nx: finalizing modules\n");
-  so_finalize(&cpp_mod);
+  if (has_cpp_mod) {
+    so_finalize(&cpp_mod);
+    so_flush_caches(&cpp_mod);
+  }
   so_finalize(&game_mod);
-  so_flush_caches(&cpp_mod);
   so_flush_caches(&game_mod);
 
   tls_setup_guard();
 
-  // C++ static constructors: runtime first, then the game.
-  debugPrintf("yoyo_nx: executing static constructors of cpp_mod\n");
-  so_execute_init_array(&cpp_mod);
+  // C++ static constructors: runtime first (if separate), then the game.
+  if (has_cpp_mod) {
+    debugPrintf("yoyo_nx: executing static constructors of cpp_mod\n");
+    so_execute_init_array(&cpp_mod);
+  }
   debugPrintf("yoyo_nx: executing static constructors of game_mod\n");
   so_execute_init_array(&game_mod);
-  so_free_temp(&cpp_mod);
+  if (has_cpp_mod) so_free_temp(&cpp_mod);
   so_free_temp(&game_mod);
 
   // --- JNI + GameMaker bootstrap ---

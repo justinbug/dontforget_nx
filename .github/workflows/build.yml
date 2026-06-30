@@ -13,8 +13,8 @@ jobs:
   build:
     name: Build NRO
     runs-on: ubuntu-latest
-    # Official devkitPro image ships devkitA64 + libnx + switch-tools.
-    # Port libraries (SDL2, mesa, ffmpeg, …) are installed below.
+    # Official devkitPro image ships devkitA64 + libnx + switch-tools + ALL
+    # current portlibs (SDL2, mesa, ffmpeg, freetype, libpng, etc) preinstalled.
     container:
       image: devkitpro/devkita64:latest
     steps:
@@ -25,45 +25,36 @@ jobs:
         uses: actions/checkout@v4
 
       # -----------------------------------------------------------------------
-      # 2. Port-library cache
-      # Cache the Switch portlib tree so repeated runs skip the ~400 MB
-      # dkp-pacman download. The cache key includes the package list and the
-      # image tag so either changing deps or pulling a new devkitA64 image
-      # busts the cache automatically.
+      # 2. Port libraries
+      # The image already ships all current portlibs, so no pacman network
+      # call should be needed. We verify they're present; only if something
+      # is actually missing do we fall back to dkp-pacman (with a UA-spoofed
+      # XferCommand + retries, since pkg.devkitpro.org has been intermittently
+      # 403'ing CI traffic — see https://github.com/devkitPro/pacman/issues/62).
       # -----------------------------------------------------------------------
-      - name: Cache portlibs
-        id: cache-portlibs
-        uses: actions/cache@v4
-        with:
-          path: /opt/devkitpro/portlibs/switch
-          key: dkp-portlibs-${{ hashFiles('.github/workflows/build.yml') }}
-
-      # -----------------------------------------------------------------------
-      # 2b. Work around devkitPro's Cloudflare WAF intermittently 403'ing
-      # pacman's default UA / blocking requests from shared CI IP ranges.
-      # See: https://github.com/devkitPro/pacman/issues/62
-      # -----------------------------------------------------------------------
-      - name: Work around devkitPro 403s
-        if: steps.cache-portlibs.outputs.cache-hit != 'true'
+      - name: Verify port libraries are present
         run: |
-          PACMAN_CONF=$(find /opt/devkitpro -name pacman.conf | head -n1)
-          echo "Patching $PACMAN_CONF"
-          sed -i '/^\[options\]/a XferCommand = /usr/bin/curl -L -A "Mozilla/5.0" -C - -f --retry 3 --retry-delay 5 -o %o %u' "$PACMAN_CONF"
-
-      - name: Install port libraries
-        if: steps.cache-portlibs.outputs.cache-hit != 'true'
-        run: |
-          for i in 1 2 3 4 5; do
-            dkp-pacman -Sy --noconfirm \
-              switch-sdl2 \
-              switch-mesa \
-              switch-libdrm_nouveau \
-              switch-ffmpeg \
-              switch-freetype \
-              switch-libpng && break
-            echo "Attempt $i failed, retrying in 15s..."
-            sleep 15
+          missing=0
+          for lib in libSDL2.a libfreetype.a libpng.a libavcodec.a; do
+            if ! find /opt/devkitpro/portlibs/switch -name "$lib" | grep -q .; then
+              echo "::warning::Missing expected portlib: $lib"
+              missing=1
+            fi
           done
+          if [ "$missing" -eq 1 ]; then
+            echo "One or more portlibs missing from the image. Falling back to dkp-pacman install."
+            PACMAN_CONF=$(find /opt/devkitpro -name pacman.conf | head -n1)
+            sed -i '/^\[options\]/a XferCommand = /usr/bin/curl -L -A "Mozilla/5.0" -C - -f --retry 3 --retry-delay 5 -o %o %u' "$PACMAN_CONF"
+            for i in 1 2 3 4 5; do
+              dkp-pacman -Sy --noconfirm \
+                switch-sdl2 switch-mesa switch-libdrm_nouveau \
+                switch-ffmpeg switch-freetype switch-libpng && break
+              echo "Attempt $i failed, retrying in 15s..."
+              sleep 15
+            done
+          else
+            echo "All required portlibs already present in image, skipping pacman."
+          fi
 
       # -----------------------------------------------------------------------
       # 3. Build

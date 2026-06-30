@@ -2,7 +2,7 @@
  *
  * Converting wrappers for the cases where bionic and newlib differ in struct
  * layout, flag values or available functions; matching calls pass through from
- * imports.c. Networking is stubbed (no network on the Switch port).
+ * imports.c.
  *
  * Modified and distributed under the terms of the MIT license; see LICENSE.
  */
@@ -27,7 +27,11 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <switch.h>
-
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <poll.h>
 #include "config.h"
 #include "util.h"
 #include "so_util.h"
@@ -642,28 +646,160 @@ int pthread_setschedparam_fake(void *thread, int policy, const void *param) { (v
 int pthread_condattr_setclock_fake(void *attr, int clk) { (void)attr; (void)clk; return 0; }
 
 // ---------------------------------------------------------------------------
-// networking (Cocos2dxDownloader): stubbed -- every call fails cleanly so
-// downloads never complete.
+// networking -- real pass-throughs to libnx BSD socket layer.
+// Requires socketInitializeDefault() to be called in main() before Startup().
 // ---------------------------------------------------------------------------
 
-int socket_fake(int domain, int type, int protocol) { (void)domain; (void)type; (void)protocol; errno = EAFNOSUPPORT; return -1; }
-int connect_fake(int fd, const void *addr, unsigned len) { (void)fd; (void)addr; (void)len; errno = ENETUNREACH; return -1; }
-int bind_fake(int fd, const void *addr, unsigned len) { (void)fd; (void)addr; (void)len; return -1; }
-int listen_fake(int fd, int backlog) { (void)fd; (void)backlog; return -1; }
-int accept_fake(int fd, void *addr, unsigned *len) { (void)fd; (void)addr; (void)len; return -1; }
-long sendto_fake(int fd, const void *buf, size_t n, int flags, const void *addr, unsigned alen) { (void)fd; (void)buf; (void)n; (void)flags; (void)addr; (void)alen; return -1; }
-long recvfrom_fake(int fd, void *buf, size_t n, int flags, void *addr, unsigned *alen) { (void)fd; (void)buf; (void)n; (void)flags; (void)addr; (void)alen; return -1; }
-int select_fake(int nfds, void *r, void *w, void *e, void *timeout) { (void)nfds; (void)r; (void)w; (void)e; (void)timeout; return 0; }
-int setsockopt_fake(int fd, int level, int opt, const void *val, unsigned len) { (void)fd; (void)level; (void)opt; (void)val; (void)len; return -1; }
-int getaddrinfo_fake(const char *node, const char *service, const void *hints, void **res) { (void)node; (void)service; (void)hints; if (res) *res = NULL; return -2; /* EAI_NONAME */ }
-void freeaddrinfo_fake(void *res) { (void)res; }
-const char *gai_strerror_fake(int err) { (void)err; return "name resolution disabled"; }
-const char *inet_ntop_fake(int af, const void *src, char *dst, unsigned size) { (void)af; (void)src; if (dst && size) dst[0] = 0; return dst; }
-int inet_pton_fake(int af, const char *src, void *dst) { (void)af; (void)src; (void)dst; return 0; }
-int ioctl_fake(int fd, unsigned long req, ...) { (void)fd; (void)req; return -1; }
+int socket_fake(int domain, int type, int protocol) {
+  return socket(domain, type, protocol);
+}
+
+int connect_fake(int fd, const void *addr, unsigned len) {
+  return connect(fd, (const struct sockaddr *)addr, (socklen_t)len);
+}
+
+int bind_fake(int fd, const void *addr, unsigned len) {
+  return bind(fd, (const struct sockaddr *)addr, (socklen_t)len);
+}
+
+int listen_fake(int fd, int backlog) {
+  return listen(fd, backlog);
+}
+
+int accept_fake(int fd, void *addr, unsigned *len) {
+  return accept(fd, (struct sockaddr *)addr, (socklen_t *)len);
+}
+
+long sendto_fake(int fd, const void *buf, size_t n, int flags,
+                 const void *addr, unsigned alen) {
+  return sendto(fd, buf, n, flags, (const struct sockaddr *)addr, (socklen_t)alen);
+}
+
+long recvfrom_fake(int fd, void *buf, size_t n, int flags,
+                   void *addr, unsigned *alen) {
+  return recvfrom(fd, buf, n, flags, (struct sockaddr *)addr, (socklen_t *)alen);
+}
+
+int select_fake(int nfds, void *r, void *w, void *e, void *timeout) {
+  return select(nfds, (fd_set *)r, (fd_set *)w, (fd_set *)e,
+                (struct timeval *)timeout);
+}
+
+int setsockopt_fake(int fd, int level, int opt, const void *val, unsigned len) {
+  return setsockopt(fd, level, opt, val, (socklen_t)len);
+}
+
+int getaddrinfo_fake(const char *node, const char *service,
+                     const void *hints, void **res) {
+  return getaddrinfo(node, service,
+                     (const struct addrinfo *)hints, (struct addrinfo **)res);
+}
+
+void freeaddrinfo_fake(void *res) {
+  freeaddrinfo((struct addrinfo *)res);
+}
+
+const char *gai_strerror_fake(int err) {
+  return gai_strerror(err);
+}
+
+const char *inet_ntop_fake(int af, const void *src, char *dst, unsigned size) {
+  return inet_ntop(af, src, dst, (socklen_t)size);
+}
+
+int inet_pton_fake(int af, const char *src, void *dst) {
+  return inet_pton(af, src, dst);
+}
+
+// ioctl on a socket fd: translate the two common bionic requests to their
+// newlib equivalents; forward everything else.
+// BIONIC FIONBIO=0x5421, FIONREAD=0x541B vs newlib FIONBIO=0x8004667e, FIONREAD=0x4004667f
+#define BIONIC_FIONBIO   0x5421
+#define BIONIC_FIONREAD  0x541B
+int ioctl_fake(int fd, unsigned long req, ...) {
+  va_list va;
+  va_start(va, req);
+  long arg = va_arg(va, long);
+  va_end(va);
+  if (req == BIONIC_FIONBIO)  return ioctl(fd, FIONBIO,   (void *)&arg);
+  if (req == BIONIC_FIONREAD) return ioctl(fd, FIONREAD,  (void *)&arg);
+  return ioctl(fd, req, (void *)arg);
+}
+
 int system_fake(const char *cmd) { (void)cmd; return -1; }
 
-// --- new fakes for libyoyo.so ---
+// GMS2 network_* functions use poll() and bare recv()/send() internally.
+// These are not in the original imports table; add entries for them in imports.c.
+int poll_fake(struct pollfd *fds, unsigned int nfds, int timeout) {
+  return poll(fds, (nfds_t)nfds, timeout);
+}
+
+long recv_fake(int fd, void *buf, size_t n, int flags) {
+  return recv(fd, buf, n, flags);
+}
+
+long send_fake(int fd, const void *buf, size_t n, int flags) {
+  return send(fd, buf, n, flags);
+}
+
+long sendmsg_fake(int fd, const void *msg, int flags) {
+  return sendmsg(fd, (const struct msghdr *)msg, flags);
+}
+
+long recvmsg_fake(int fd, void *msg, int flags) {
+  return recvmsg(fd, (struct msghdr *)msg, flags);
+}
+
+// ---------------------------------------------------------------------------
+// remaining socket helpers -- also real pass-throughs now
+// ---------------------------------------------------------------------------
+
+int shutdown_fake(int fd, int how) {
+  return shutdown(fd, how);
+}
+
+int getsockopt_fake(int fd, int level, int optname, void *optval, unsigned *optlen) {
+  return getsockopt(fd, level, optname, optval, (socklen_t *)optlen);
+}
+
+int getsockname_fake(int fd, void *addr, unsigned *addrlen) {
+  return getsockname(fd, (struct sockaddr *)addr, (socklen_t *)addrlen);
+}
+
+void *gethostbyname_fake(const char *name) {
+  return gethostbyname(name);
+}
+
+int getnameinfo_fake(const void *addr, unsigned addrlen,
+                     char *host, unsigned hostlen,
+                     char *serv, unsigned servlen, int flags) {
+  return getnameinfo((const struct sockaddr *)addr, (socklen_t)addrlen,
+                     host, (socklen_t)hostlen,
+                     serv, (socklen_t)servlen, flags);
+}
+
+int getpeername_fake(int fd, void *addr, unsigned *addrlen) {
+  return getpeername(fd, (struct sockaddr *)addr, (socklen_t *)addrlen);
+}
+
+// inet_ntoa takes a struct in_addr; bionic calls us with a raw uint32_t
+char *inet_ntoa_fake(uint32_t in) {
+  struct in_addr a;
+  a.s_addr = in;
+  return inet_ntoa(a);
+}
+
+unsigned int inet_addr_fake(const char *cp) {
+  return inet_addr(cp);
+}
+
+// if_nametoindex may not be available on all libnx builds; keep as stub
+// since the game only needs it for multicast (unused by GameMakerServer).
+unsigned int if_nametoindex_fake(const char *ifname) { (void)ifname; return 0; }
+
+// ---------------------------------------------------------------------------
+// misc libyoyo.so fakes
+// ---------------------------------------------------------------------------
 
 // ctype array
 static char fake_ctype[384];
@@ -725,16 +861,6 @@ struct fake_mallinfo mallinfo_fake(void) {
   struct fake_mallinfo mi = {0};
   return mi;
 }
-
-int shutdown_fake(int fd, int how) { (void)fd; (void)how; errno = ENOTSUP; return -1; }
-int getsockopt_fake(int fd, int level, int optname, void *optval, unsigned *optlen) { (void)fd; (void)level; (void)optname; (void)optval; (void)optlen; errno = ENOTSUP; return -1; }
-int getsockname_fake(int fd, void *addr, unsigned *addrlen) { (void)fd; (void)addr; (void)addrlen; errno = ENOTSUP; return -1; }
-void *gethostbyname_fake(const char *name) { (void)name; return NULL; }
-int getnameinfo_fake(const void *addr, unsigned addrlen, char *host, unsigned hostlen, char *serv, unsigned servlen, int flags) { (void)addr; (void)addrlen; (void)host; (void)hostlen; (void)serv; (void)servlen; (void)flags; return -1; }
-int getpeername_fake(int fd, void *addr, unsigned *addrlen) { (void)fd; (void)addr; (void)addrlen; errno = ENOTSUP; return -1; }
-char *inet_ntoa_fake(uint32_t in_addr) { (void)in_addr; return "0.0.0.0"; }
-unsigned int inet_addr_fake(const char *cp) { (void)cp; return 0; }
-unsigned int if_nametoindex_fake(const char *ifname) { (void)ifname; return 0; }
 
 int __android_log_vprint_fake(int prio, const char *tag, const char *fmt, va_list ap) {
   (void)prio;
